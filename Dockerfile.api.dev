@@ -1,0 +1,21 @@
+FROM python:3.12-slim
+
+# 安裝 Git 與編譯相關工具（uv 拉取 git 依賴所需）
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    ca-certificates \
+    curl \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# 安裝 uv 套件管理器
+RUN pip install uv --no-cache-dir
+
+# 預安裝常見「資料分析 + DB driver」套件（裝進系統層 site-packages）
+# scratchpad venv 皆以 --system-site-packages 建立，可自動共用此處套件，
+# 避免 agent 每次執行 .py 時重複 pip install（例如 pymysql）。
+RUN pip install --no-cache-dir \
+    pandas numpy duckdb pyarrow openpyxl sqlalchemy \
+    pymysql mysql-connector-python psycopg2-binary
+
+WORKDIR /app

@@ -1,0 +1,63 @@
+services:
+  # 後端 API 服務 (掛載本地 backend 原始碼，啟用 hot reload/editable mode)
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api.dev
+    container_name: mindshub-api-dev
+    working_dir: /app
+    ports:
+      - "${COWORK_API_PORT:-26866}:26866"
+    environment:
+      - COWORK_SERVER_HOST=0.0.0.0
+      - COWORK_SERVER_PORT=26866
+      - PYTHONUNBUFFERED=1
+    volumes:
+      # 絕對路徑: docker daemon 在宿主機上跑, 必須用宿主機看得到的路徑 (見 .env MINDSHUB_DIR)
+      # mindshub fork 的 backend/ 在頂層（無 src/ 子目錄）
+      - ${MINDSHUB_DIR}/backend:/app/backend
+      # submodule 的 .git 是指向 ../../.git/modules/... 的檔案, 容器內解析不到會導致
+      # hatch-vcs 偵測不到版本 (fallback 0.0.0-dev) → uv 解不出 anton-agent>=2.26.8.23.1,<3。
+      # 掛載頂層 .git 讓 git describe 可解析, editable install 取得真實版本 (v2.26.x / v0.26.x)。
+      - ${MINDSHUB_DIR}/.git:/app/.git
+      - cowork-data:/root/.cowork
+    # --no-sources-package anton-agent: 忽略 core_api pyproject [tool.uv.sources] 的 git pin (mindsdb/anton main)，
+    # 讓 local editable /app/backend/core_agent (RC38 fork) 生效，避免 URL 衝突 crash loop。
+    # 注意: bash -c 字串內不可放 # 註解或 \ 續行（YAML > 折行會把換行折成空格）。
+    command: >
+      bash -c "export HERMES_NIX_BUILD=1 && uv pip install --system --no-sources-package anton-agent -e /app/backend/core_agent -e /app/backend/core_api && cowork-server"
+    restart: unless-stopped
+
+  # 前端 Web 服務 (掛載本地 frontend 原始碼，啟用 Vite Hot-Module-Replacement 即時預覽)
+  web:
+    image: node:22-slim
+    container_name: mindshub-web-dev
+    working_dir: /app
+    ports:
+      - "${COWORK_WEB_PORT:-15173}:5173"
+    environment:
+      - NODE_ENV=development
+      - BUILD_TARGET=web
+      - VITE_RENDERER_PORT=5173
+      - COWORK_SERVER_PORT=26866
+      - COWORK_SERVER_HOST=mindshub-api-dev
+      # dev 模式只跑 Vite web server，不需要 Electron binary；
+      # 跳過 postinstall 下載（此環境連不上 GitHub releases，會 ECONNRESET）
+      - ELECTRON_SKIP_BINARY_DOWNLOAD=1
+    volumes:
+      # 絕對路徑: docker daemon 在宿主機上跑, 必須用宿主機看得到的路徑 (見 .env MINDSHUB_DIR)
+      # mindshub fork 的 frontend/ 在頂層（無 src/ 子目錄）；node_modules 以匿名卷隔離，避免污染宿主機
+      - ${MINDSHUB_DIR}/frontend:/app
+      - node-modules:/app/node_modules
+    command: >
+      bash -c "npm install &&
+               npx vite dev src/renderer --host 0.0.0.0 --port 5173"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  cowork-data:
+    driver: local
+  node-modules:
+    driver: local
